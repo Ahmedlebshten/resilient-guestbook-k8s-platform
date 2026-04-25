@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: guestbook-ingress
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-staging"
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+  - hosts:
+    - ahmed-guestbook.duckdns.org
+    secretName: guestbook-tls-cert
+  rules:
+  - host: ahmed-guestbook.duckdns.org
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: guestbook-service
+            port:
+              number: 80
