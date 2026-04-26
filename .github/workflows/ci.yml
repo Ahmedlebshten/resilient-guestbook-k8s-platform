@@ -1,64 +1,71 @@
-name: DevSecOps Pipeline
+name: DevSecOps GitOps Pipeline
 
 on:
   push:
     branches: [ main ]
 
 jobs:
-  build-and-test:
+  build-and-deploy:
     runs-on: self-hosted
-    # Set default working directory to 'app' where package.json and Dockerfile are located
-    defaults:
-      run:
-        working-directory: ./app 
+    # Essential permissions to allow the runner to modify manifests and push changes back to Git
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required for successful git push operations
 
-      # Step 1: Install dependencies and build the application
-      - name: Install Dependencies
-        run: |
-          echo "Installing application dependencies..."
-          npm install
-
-      # Step 2: Run Unit Tests (Ensures code logic is correct before packaging)
-      - name: Run Unit Tests
-        run: |
-          echo "Executing Unit Tests..."
-          npm test || echo "No tests defined in package.json, skipping tests..."
-
-      # Step 3: Build Docker Image using the Commit SHA for unique versioning
+      # Step 1: Build Docker Image using GitHub Run Number (v1, v2, v3...)
       - name: Build Docker Image
+        working-directory: ./app
         run: |
-          echo "Building Docker Image: ahmedlebshten/guestbook:${{ github.sha }}"
-          docker build -t ahmedlebshten/guestbook:${{ github.sha }} .
-          docker tag ahmedlebshten/guestbook:${{ github.sha }} ahmedlebshten/guestbook:latest
+          VERSION="v${{ github.run_number }}"
+          echo "Building Version: $VERSION"
+          docker build -t ahmedlebshten/guestbook:$VERSION .
+          docker tag ahmedlebshten/guestbook:$VERSION ahmedlebshten/guestbook:latest
 
-      # Step 4: Vulnerability Scanning with Trivy (Security Gate)
+      # Step 2: Security Gate - Scan Image for Vulnerabilities
       - name: Run Trivy Security Scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'ahmedlebshten/guestbook:${{ github.sha }}'
+          image-ref: 'ahmedlebshten/guestbook:v${{ github.run_number }}'
           format: 'table'
           exit-code: '0' 
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL'
 
-      # Step 5: Authenticate and Push Image to Docker Hub
+      # Step 3: Authenticate and Push Image to Docker Hub
       - name: Docker Hub Login and Push
-        if: success()
         run: |
-          echo "Pushing images to Docker Hub..."
+          VERSION="v${{ github.run_number }}"
           echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-          docker push ahmedlebshten/guestbook:${{ github.sha }}
+          docker push ahmedlebshten/guestbook:$VERSION
           docker push ahmedlebshten/guestbook:latest
 
-      # Step 6: Deploy to K3s Cluster and verify Rollout
-      - name: Deploy to K3s Cluster
-        if: success()
+      # Step 4: GitOps - Update the Kubernetes Manifest automatically
+      - name: Update Kubernetes Manifest in Git
         run: |
-          echo "Updating Kubernetes Deployment..."
-          kubectl set image deployment/guestbook-app guestbook=ahmedlebshten/guestbook:${{ github.sha }}
+          VERSION="v${{ github.run_number }}"
+          
+          # Configure Git Bot Identity
+          git config --global user.email "ahmed-bot@github.com"
+          git config --global user.name "Ahmed DevOps Bot"
+          
+          # Update the image tag in the deployment manifest
+          # Ensure the path 'k8s-manifests/app-deployment.yml' matches your repository structure
+          sed -i "s|image: ahmedlebshten/guestbook:.*|image: ahmedlebshten/guestbook:$VERSION|g" manifests/deployment.yaml
+          
+          # Commit and Push the change with [skip ci] to prevent infinite pipeline loops
+          git add manifests/deployment.yml
+          git commit -m "chore: update image to $VERSION [skip ci]"
+          git push origin main
+
+      # Step 5: Continuous Deployment - Apply the updated manifest to K3s
+      - name: Apply to K3s Cluster
+        run: |
+          echo "Applying the updated manifest to the production cluster..."
+          kubectl apply -f manifests/deployment.yaml
           kubectl rollout status deployment/guestbook-app
