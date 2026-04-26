@@ -7,54 +7,58 @@ on:
 jobs:
   build-and-test:
     runs-on: self-hosted
+    # Set default working directory to 'app' where package.json and Dockerfile are located
+    defaults:
+      run:
+        working-directory: ./app 
+
     steps:
-      - name: Checkout Code
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
-# install dependencies and build
-      - name: Install Dependencies & Build
+      # Step 1: Install dependencies and build the application
+      - name: Install Dependencies
         run: |
-          echo "Starting Code Build..."
-          # لو Node.js استخدم: npm install && npm run build
-          # لو Go استخدم: go build ./...
+          echo "Installing application dependencies..."
           npm install
 
-# run unit tests 
+      # Step 2: Run Unit Tests (Ensures code logic is correct before packaging)
       - name: Run Unit Tests
         run: |
-          echo "Running Unit Tests..."
-          # لو Node.js استخدم: npm test
-          # لو Go استخدم: go test ./...
-          npm test || echo "No tests defined, skipping..."
+          echo "Executing Unit Tests..."
+          npm test || echo "No tests defined in package.json, skipping tests..."
 
-# build docker image if tests passed
+      # Step 3: Build Docker Image using the Commit SHA for unique versioning
       - name: Build Docker Image
         run: |
+          echo "Building Docker Image: ahmedlebshten/guestbook:${{ github.sha }}"
           docker build -t ahmedlebshten/guestbook:${{ github.sha }} .
           docker tag ahmedlebshten/guestbook:${{ github.sha }} ahmedlebshten/guestbook:latest
 
-# security scan with trivy
+      # Step 4: Vulnerability Scanning with Trivy (Security Gate)
       - name: Run Trivy Security Scan
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: 'ahmedlebshten/guestbook:${{ github.sha }}'
           format: 'table'
-          exit-code: '1'
+          exit-code: '1' # Fails the pipeline if vulnerabilities are found
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
-# push to Docker Hub
-      - name: Login and Push
+      # Step 5: Authenticate and Push Image to Docker Hub
+      - name: Docker Hub Login and Push
         if: success()
         run: |
+          echo "Pushing images to Docker Hub..."
           echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
           docker push ahmedlebshten/guestbook:${{ github.sha }}
           docker push ahmedlebshten/guestbook:latest
 
-# deploy to k3s
-      - name: Deploy to K3s
+      # Step 6: Deploy to K3s Cluster and verify Rollout
+      - name: Deploy to K3s Cluster
         if: success()
         run: |
+          echo "Updating Kubernetes Deployment..."
           kubectl set image deployment/guestbook-app guestbook=ahmedlebshten/guestbook:${{ github.sha }}
           kubectl rollout status deployment/guestbook-app
