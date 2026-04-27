@@ -61,5 +61,5 @@ jobs:
           sed -i "s|image: ahmedlebshten/guestbook:.*|image: ahmedlebshten/guestbook:$VERSION|g" $TARGET_FILE
           
           git add $TARGET_FILE
-          git commit -m "chore: update image to $VERSION for ArgoCD [skip ci]"
+          git commit -m "chore: update image to $VERSION for ArgoCD"
           git push origin main
