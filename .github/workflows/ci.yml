@@ -1,13 +1,12 @@
-name: DevSecOps GitOps Pipeline
+name: DevSecOps CI Pipeline
 
 on:
   push:
     branches: [ main ]
 
 jobs:
-  build-and-deploy:
+  build-and-push:
     runs-on: self-hosted
-    # Essential permissions to allow the runner to modify manifests and push changes back to Git
     permissions:
       contents: write
 
@@ -15,19 +14,16 @@ jobs:
       - name: Clean Workspace
         run: |
           echo "Cleaning up previous runs..."
-          # Use find to remove ALL files including hidden dirs like .git
           find "${{ github.workspace }}" -mindepth 1 -delete 2>/dev/null || true
 
       - name: Checkout Source Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Required for successful git push operations
+          fetch-depth: 0
           clean: true
 
-      # Step 1: Build Docker Image using GitHub Run Number (v1, v2, v3...)
       - name: Prune Docker Cache
         run: |
-          echo "Pruning stale Docker build cache and dangling images..."
           docker builder prune -af || true
           docker image prune -af || true
 
@@ -35,15 +31,9 @@ jobs:
         working-directory: ./app
         run: |
           VERSION="v${{ github.run_number }}"
-          echo "Building Version: $VERSION"
-          # Verify the source code is actually the latest
-          echo "--- Source file hash ---"
-          sha256sum app.js
-          echo "------------------------"
           docker build --no-cache --pull -t ahmedlebshten/guestbook:$VERSION .
           docker tag ahmedlebshten/guestbook:$VERSION ahmedlebshten/guestbook:latest
 
-      # Step 2: Security Gate - Scan Image for Vulnerabilities
       - name: Run Trivy Security Scan
         uses: aquasecurity/trivy-action@master
         with:
@@ -54,7 +44,6 @@ jobs:
           vuln-type: 'os,library'
           severity: 'CRITICAL'
 
-      # Step 3: Authenticate and Push Image to Docker Hub
       - name: Docker Hub Login and Push
         run: |
           VERSION="v${{ github.run_number }}"
@@ -62,40 +51,15 @@ jobs:
           docker push ahmedlebshten/guestbook:$VERSION
           docker push ahmedlebshten/guestbook:latest
 
-      # Step 4: GitOps - Update the Kubernetes Manifest automatically
-      - name: Update Kubernetes Manifest in Git
+      - name: GitOps - Update Image Tag in Manifest
         run: |
           VERSION="v${{ github.run_number }}"
-          
-          # Configure Git Bot Identity
           git config --global user.email "ahmed-bot@github.com"
           git config --global user.name "Ahmed DevOps Bot"
           
-          # Use absolute path with GITHUB_WORKSPACE to ensure sed finds the file
           TARGET_FILE="$GITHUB_WORKSPACE/k8s-manifests/app-deployment.yml"
-          
-          # Update the image tag in the deployment manifest
           sed -i "s|image: ahmedlebshten/guestbook:.*|image: ahmedlebshten/guestbook:$VERSION|g" $TARGET_FILE
           
-          # Commit and Push the change with [skip ci] to prevent infinite pipeline loops
           git add $TARGET_FILE
-          git commit -m "chore: update image to $VERSION [skip ci]"
+          git commit -m "chore: update image to $VERSION for ArgoCD [skip ci]"
           git push origin main
-
-      # Step 5: Continuous Deployment - Apply the updated manifest to K3s
-      - name: Apply to K3s Cluster
-        run: |
-          VERSION="v${{ github.run_number }}"
-          echo "Force updating cluster to use version $VERSION"
-          
-          # Force K3s/containerd to discard its cached copy of this image
-          sudo k3s crictl rmi "docker.io/ahmedlebshten/guestbook:$VERSION" 2>/dev/null || true
-          sudo k3s crictl rmi "docker.io/ahmedlebshten/guestbook:latest" 2>/dev/null || true
-          
-          # Apply the FULL manifest (already updated by sed in Step 4) to the cluster
-          kubectl apply -f $GITHUB_WORKSPACE/k8s-manifests/app-deployment.yml
-          
-          # Force all pods to restart and pull the fresh image
-          kubectl rollout restart deployment/guestbook-app
-          
-          kubectl rollout status deployment/guestbook-app
