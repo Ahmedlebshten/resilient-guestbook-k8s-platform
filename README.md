@@ -7,7 +7,7 @@ A production-grade, cloud-native **Guestbook** web application deployed on **AWS
 ---
 
 ## 🖼️ System Architecture
-<img width="1600" height="872" alt="architecture" src="https://github.com/user-attachments/assets/dcf4f172-0779-49a3-9edd-f8f489dec48f" />
+<img width="1600" height="908" alt="archticture" src="https://github.com/user-attachments/assets/3196b984-f977-4e6e-b01c-75e314a5023d" />
 
 ---
 ## 🏗️ Architecture at a Glance
